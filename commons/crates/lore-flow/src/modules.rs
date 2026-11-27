@@ -455,6 +455,9 @@ pub struct Body {
     /// The height of the words below the picture with their gap to it (0 without them), not
     /// counting `label_drop`.
     pub below: f64,
+    /// The height of the words above the picture with their gap to it (0 without them), not
+    /// counting `label_rise`.
+    pub above: f64,
     /// The height of the line its neighbours in a row are aligned on: the middle of the
     /// picture's large pieces (see `main_middle`), which an attachment on one side (a loop
     /// arrow) does not move. Lines enter on it too (`cy` is the same height; the `port` child
@@ -2325,12 +2328,17 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     if !n.caption.is_empty() {
         below.push((n.caption.clone(), "caption", small));
     }
+    // `label_at=above`: the words written under the picture are written above it, in their
+    // order, so a line can leave the picture's bottom without crossing them
+    if n.str("label_at") == Some("above") {
+        above.append(&mut below);
+    }
     // words of the drawing itself that are wider than it: the room it needs is wider too, so a
     // region's frame and the next column keep clear of them
     let spill = words_width(&core.objs, core.w);
     if above.is_empty() && below.is_empty() && core.single {
         let (w, h) = (core.w, core.h);
-        return Body { w, h, cy: h / 2.0, reserve_w: w.max(spill), art: (0.0, 0.0, w, h), words: (false, false), below: 0.0, axis: h / 2.0, objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend, warn: { warn.extend(icon_problem(n)); warn } };
+        return Body { w, h, cy: h / 2.0, reserve_w: w.max(spill), art: (0.0, 0.0, w, h), words: (false, false), below: 0.0, above: 0.0, axis: h / 2.0, objs: core.objs, single: true, ellipse: core.ellipse, legend: core.legend, warn: { warn.extend(icon_problem(n)); warn } };
     }
     let legend = core.legend;
     warn.extend(icon_problem(n));
@@ -2340,7 +2348,10 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
     // the words below start `label_drop` lower, so the labels of a row stand on one line
     // under its tallest picture (set by `crate::pack`)
     let drop = if below.is_empty() { 0.0 } else { n.num("label_drop").unwrap_or(0.0).max(0.0) };
-    let strip = if cx.symmetric { top.max(bottom + drop) } else { top };
+    // and the words above start `label_rise` higher, so they stand on one line over the row's
+    // tallest picture
+    let rise = if above.is_empty() { 0.0 } else { n.num("label_rise").unwrap_or(0.0).max(0.0) };
+    let strip = if cx.symmetric { (top + rise).max(bottom + drop) } else { top + rise };
     let mut objs = Vec::new();
     let (w, h) = (core.w, core.h + strip + if cx.symmetric { strip } else { bottom + drop });
     let mid = main_middle(&core.objs, core.art.unwrap_or((0.0, 0.0, core.w, core.h)));
@@ -2362,7 +2373,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         objs.push(o);
     }
     let mut reserve_w = w.max(spill);
-    let mut y = strip - pad;
+    let mut y = strip - rise - pad;
     for (s, name, t) in above.iter().rev() {
         let lines = text::block(&cx.vars.resolve(s), t.size).1 as f64;
         y -= lines * t.size * 1.25;
@@ -2377,7 +2388,7 @@ pub fn make(node: &Node, cx: &Ctx) -> Body {
         reserve_w = reserve_w.max(tw);
         objs.push(o);
     }
-    Body { w, h, cy: strip + mid, reserve_w, art, words: (!above.is_empty(), !below.is_empty()), below: bottom, axis: strip + mid, objs, single: false, ellipse: false, legend, warn }
+    Body { w, h, cy: strip + mid, reserve_w, art, words: (!above.is_empty(), !below.is_empty()), below: bottom, above: top, axis: strip + mid, objs, single: false, ellipse: false, legend, warn }
 }
 
 /// Wrap a body's objects into what goes on the slide: the single shape, or a

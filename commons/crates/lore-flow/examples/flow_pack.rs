@@ -91,6 +91,10 @@ fn main() {
         println!("lines against the rule (over two bends or doubling back) {broken}; blocks passed beneath {under}");
         println!("lines {}; bends {bends}; forced {forced}; hugging {}; over a picture {over}; off the page {off}; flow lines in a row {row}, in a column {col}, neither {neither}", routes.len(), lore_flow::route::hugging(&p.layout, &routes));
     }
+    // what could not be drawn as asked (a line that does not show, a side that has no shape)
+    for w in &built.warnings {
+        println!("  warning: {w}");
+    }
     let fig = Figure { layout: p.layout.clone(), routes, built };
     std::fs::write(&a[3], lore_flow::figure::svg_mm(&fig, None)).expect("write");
     // checks: nothing over anything, everything inside its area

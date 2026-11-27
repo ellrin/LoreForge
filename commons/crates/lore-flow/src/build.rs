@@ -530,6 +530,12 @@ pub fn build_with(g: &Graph, theme: &Theme, vars: &Vars, lib: &Library, math: &d
         if r.forced {
             warnings.push(format!("{} -> {}: no clear path, drawn straight", e.from, e.to));
         }
+        // a line that does not show: all of it lies along other lines or beneath blocks, or
+        // what shows is no longer than its arrowhead (the head is three widths long)
+        let head = 3.0 * st.width_pt.max(1.0);
+        if !r.forced && !r.branch && crate::lines::seen(g, lay, routes, ri) <= head {
+            warnings.push(format!("{} → {}: 這條線看不到（疊在別的線上、藏在方塊下或太短）", e.from, e.to));
+        }
         warnings.extend(r.warnings.iter().cloned());
         // one smooth curve: a free shape from end to end (it keeps its arrowheads; a curve
         // cannot be a connector, so it is not glued to its blocks)

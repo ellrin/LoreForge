@@ -116,6 +116,19 @@ rows from its own, in their middle (the trunk's big blocks beside four parallel 
 Crossing lines are told apart (`build::lines_behind`): of two lines that cross, the side line
 lies behind the flow line (of two of one kind, the later one); it is drawn first and half-way
 towards the paper's colour, so the crossing reads as depth.
+Every line is seen or said not to be: `lines::seen` measures what of a line shows (its length
+less the stretches beneath other blocks and along a line drawn before it, the flow's lines
+first), and `build` warns when that is no longer than its arrowhead (a skip along a row of the
+flow, drawn over the flow line); a line from a block to itself is kept, of no length, with a
+warning. A line that shares a block with another may run along it the same way, never back along
+it. A mark tied with `by=` keeps `Air.line` of room from each block it shares a line with (and
+its band, when it finds no free room, holds that room), so its lines show their shafts and heads.
+A side stated on a line (`a -> b from=bottom to=left`) is the side it leaves or arrives by: only
+lines of the three shapes through it are drawn; when none exists the side is kept, with at most
+two bends (a bracket round the outside for the same side at both ends), and the route carries a
+warning. `label_at=above` writes the words a picture writes under it above it instead, those of a
+row on one line over the row's tallest picture (`label_rise=`, set by `pack`, like
+`label_drop=`), so a line can leave the picture's bottom free of them; without it nothing changes.
 Not yet: the words of a line that passes beneath a block still lie over that block; the lines of
 notes; free areas get no line room; packing a figure of fifty blocks takes over a minute.
 

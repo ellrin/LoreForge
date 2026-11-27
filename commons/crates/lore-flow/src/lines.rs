@@ -76,6 +76,80 @@ fn shapes(a: &Placed, b: &Placed) -> Vec<Cand> {
     v
 }
 
+/// The lines that leave `a` on side `s` and reach `b` on side `t`, built from those sides: an L
+/// when the sides are square to each other, a step (its middle run at the shares of the gap in
+/// [`MIDDLES`]) when they face the same way along one axis, and a bracket round the outside of
+/// both blocks when they are the same side. Only those that keep the rule and leave and arrive
+/// through their sides are lines of the three shapes (see [`goes_by_its_sides`]); the others
+/// are what a stated side is drawn with when no line of the three shapes has it.
+fn sided(a: &Placed, b: &Placed, s: Side, t: Side) -> Vec<Cand> {
+    let (p, q) = (mid(a, s), mid(b, t));
+    let across = |x: Side| matches!(x, Side::Left | Side::Right);
+    let mut v = Vec::new();
+    if across(s) != across(t) {
+        let corner = if across(s) { (q.0, p.1) } else { (p.0, q.1) };
+        v.push(Cand { pts: vec![p, corner, q], from: s, to: t });
+    } else if t == s.opposite() {
+        if (across(s) && (p.1 - q.1).abs() < 0.5) || (!across(s) && (p.0 - q.0).abs() < 0.5) {
+            v.push(Cand { pts: vec![p, q], from: s, to: t });
+        }
+        for f in MIDDLES {
+            let pts = if across(s) {
+                let x = p.0 + (q.0 - p.0) * f;
+                vec![p, (x, p.1), (x, q.1), q]
+            } else {
+                let y = p.1 + (q.1 - p.1) * f;
+                vec![p, (p.0, y), (q.0, y), q]
+            };
+            v.push(Cand { pts, from: s, to: t });
+        }
+    } else {
+        // the same side of both: round the outside of the two, half the shorter picture out
+        let (ra, rb) = (&a.art, &b.art);
+        let pts = match s {
+            Side::Top => {
+                let y = ra.y.min(rb.y) - ra.h.min(rb.h) / 2.0;
+                vec![p, (p.0, y), (q.0, y), q]
+            }
+            Side::Bottom => {
+                let y = ra.bottom().max(rb.bottom()) + ra.h.min(rb.h) / 2.0;
+                vec![p, (p.0, y), (q.0, y), q]
+            }
+            Side::Left => {
+                let x = ra.x.min(rb.x) - ra.w.min(rb.w) / 2.0;
+                vec![p, (x, p.1), (x, q.1), q]
+            }
+            Side::Right => {
+                let x = ra.right().max(rb.right()) + ra.w.min(rb.w) / 2.0;
+                vec![p, (x, p.1), (x, q.1), q]
+            }
+        };
+        v.push(Cand { pts, from: s, to: t });
+    }
+    v
+}
+
+/// Of a line's two ends, how many do not go by their sides: the first run goes out of the side
+/// it leaves by, the last run into the side it arrives by.
+fn ends_astray(c: &Cand) -> usize {
+    let n = c.pts.len();
+    if n < 2 {
+        return 2;
+    }
+    let runs_along = |p: Pt, q: Pt, d: (f64, f64)| {
+        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+        dx * d.0 + dy * d.1 > 0.05 && (dx * d.1 - dy * d.0).abs() < 0.05
+    };
+    let (o, i) = (c.from.normal(), c.to.normal());
+    !runs_along(c.pts[0], c.pts[1], o) as usize + !runs_along(c.pts[n - 2], c.pts[n - 1], (-i.0, -i.1)) as usize
+}
+
+/// A line leaves through the side it names and arrives through its other side, and keeps the rule.
+fn goes_by_its_sides(c: &Cand) -> bool {
+    let r = Route { edge: 0, points: c.pts.clone(), from_side: c.from, to_side: c.to, from_site: 0, to_site: 0, forced: false, warnings: Vec::new(), curve: false, branch: false };
+    ends_astray(c) == 0 && keeps_the_rule(&r)
+}
+
 /// Two runs lie along each other (same line, more than a point in common).
 fn along(a: (Pt, Pt), b: (Pt, Pt)) -> bool {
     let h = |s: (Pt, Pt)| (s.0.1 - s.1.1).abs() < 0.5;
@@ -84,11 +158,75 @@ fn along(a: (Pt, Pt), b: (Pt, Pt)) -> bool {
     (h(a) && h(b) && (a.0.1 - b.0.1).abs() < 1.5 && over(a.0.0, a.1.0, b.0.0, b.1.0)) || (w(a) && w(b) && (a.0.0 - b.0.0).abs() < 1.5 && over(a.0.1, a.1.1, b.0.1, b.1.1))
 }
 
+/// Two runs go opposite ways.
+fn against(a: (Pt, Pt), b: (Pt, Pt)) -> bool {
+    let d = |s: (Pt, Pt)| (s.1.0 - s.0.0, s.1.1 - s.0.1);
+    let (u, v) = (d(a), d(b));
+    u.0 * v.0 + u.1 * v.1 < 0.0
+}
+
 /// How many blocks other than its own a line passes (beneath).
 pub fn beneath(g: &Graph, lay: &Layout, r: &Route) -> usize {
     let e = &g.edges[r.edge];
     let own = [g.node_index(&e.from), g.node_index(&e.to)];
     lay.nodes.iter().enumerate().filter(|(i, n)| !own.contains(&Some(*i)) && r.points.windows(2).any(|w| segment_hits(w[0], w[1], &n.art.inflate(-0.5)))).count()
+}
+
+/// How much of a line is seen: its length less the stretches beneath a block other than its
+/// own two (the blocks are drawn over the lines) and the stretches along a line drawn before it
+/// (the flow's own lines first, then in the order written, as [`lines`] draws them): drawn over
+/// each other the two read as one, and what shows there is the earlier line. A line whose seen
+/// length is no longer than its arrowhead is not drawn as far as the reader can tell; `build`
+/// says so.
+pub fn seen(g: &Graph, lay: &Layout, routes: &[Route], i: usize) -> f64 {
+    let rank = |k: usize| (g.edges[routes[k].edge].kind != EdgeKind::Data, routes[k].edge);
+    let r = &routes[i];
+    let e = &g.edges[r.edge];
+    let own = [g.node_index(&e.from), g.node_index(&e.to)];
+    let mut total = 0.0;
+    for w in r.points.windows(2) {
+        let (p, q) = (w[0], w[1]);
+        let flat = (p.1 - q.1).abs() < 0.5;
+        let upright = (p.0 - q.0).abs() < 0.5;
+        let len = (q.0 - p.0).abs() + (q.1 - p.1).abs();
+        if !(flat ^ upright) {
+            // a point, or a slanted line (forced): taken as seen
+            total += len;
+            continue;
+        }
+        // the run as an interval along its own axis, the covered stretches in the same terms
+        let (lo, hi) = if flat { (p.0.min(q.0), p.0.max(q.0)) } else { (p.1.min(q.1), p.1.max(q.1)) };
+        let mut cover: Vec<(f64, f64)> = Vec::new();
+        for (k, n) in lay.nodes.iter().enumerate() {
+            if own.contains(&Some(k)) || !segment_hits(p, q, &n.art.inflate(-0.5)) {
+                continue;
+            }
+            let b = n.art;
+            cover.push(if flat { (b.x, b.right()) } else { (b.y, b.bottom()) });
+        }
+        for (j, o) in routes.iter().enumerate() {
+            if rank(j) >= rank(i) {
+                continue;
+            }
+            for u in o.points.windows(2) {
+                if along((p, q), (u[0], u[1])) {
+                    cover.push(if flat { (u[0].0.min(u[1].0), u[0].0.max(u[1].0)) } else { (u[0].1.min(u[1].1), u[0].1.max(u[1].1)) });
+                }
+            }
+        }
+        let mut cover: Vec<(f64, f64)> = cover.into_iter().map(|(a, b)| (a.max(lo), b.min(hi))).filter(|(a, b)| b > a).collect();
+        cover.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let (mut hidden, mut reach) = (0.0, lo);
+        for (a, b) in cover {
+            let a = a.max(reach);
+            if b > a {
+                hidden += b - a;
+                reach = b;
+            }
+        }
+        total += (hi - lo) - hidden;
+    }
+    total
 }
 
 /// A line keeps the rule: at most two bends and no run back the way an earlier run came.
@@ -107,29 +245,77 @@ pub fn lines(g: &Graph, lay: &Layout) -> Vec<Route> {
     for ei in order {
         let e = &g.edges[ei];
         let (Some(ia), Some(ib)) = (g.node_index(&e.from), g.node_index(&e.to)) else { continue };
+        let (a, b) = (&lay.nodes[ia], &lay.nodes[ib]);
         if ia == ib {
+            // a line from a block back to itself has no shape of the three (it turns back): it
+            // is kept, of no length, and says so
+            let p = mid(a, Side::Right);
+            let name = format!("{} → {}", e.from, e.to);
+            done.push((ei, Route { edge: ei, points: vec![p, p], from_side: Side::Right, to_side: Side::Right, from_site: site_of(Side::Right, 2), to_site: site_of(Side::Right, 2), forced: true, warnings: vec![format!("{name}: 線的兩端是同一個方塊，三種線形都畫不出")], curve: false, branch: false }));
             continue;
         }
-        let (a, b) = (&lay.nodes[ia], &lay.nodes[ib]);
         let words = |n: &Placed, s: Side| (s == Side::Top && n.words.0) || (s == Side::Bottom && n.words.1);
         let cost = |c: &Cand| -> f64 {
             let bends = c.pts.len() as f64 - 2.0;
             // a block of words only cannot hide a line: passing it counts as much as many pictures
             let under: f64 = lay.nodes.iter().enumerate().filter(|(i, n)| *i != ia && *i != ib && c.pts.windows(2).any(|w| segment_hits(w[0], w[1], &n.art.inflate(-0.5)))).map(|(i, _)| if g.nodes[i].module == "label" { 8.0 } else { 1.0 }).sum();
-            // along a line of other blocks (a line that shares an end with this one may share its run)
+            // along a line of other blocks; a line that shares an end with this one may share
+            // its run going the same way (lines fanning out of one block, or into one), never
+            // back along it (it would be drawn over that line and not be seen)
             let shared = done
                 .iter()
-                .filter(|(o, _)| {
+                .filter(|(o, r)| {
                     let x = &g.edges[*o];
-                    x.from != e.from && x.to != e.to && x.from != e.to && x.to != e.from
+                    let kin = !(x.from != e.from && x.to != e.to && x.from != e.to && x.to != e.from);
+                    c.pts.windows(2).any(|w| r.points.windows(2).any(|q| along((w[0], w[1]), (q[0], q[1])) && (!kin || against((w[0], w[1]), (q[0], q[1])))))
                 })
-                .filter(|(_, r)| c.pts.windows(2).any(|w| r.points.windows(2).any(|q| along((w[0], w[1]), (q[0], q[1])))))
                 .count() as f64;
             let wordy = words(a, c.from) as u8 as f64 + words(b, c.to) as u8 as f64;
             let len: f64 = c.pts.windows(2).map(|w| (w[1].0 - w[0].0).abs() + (w[1].1 - w[0].1).abs()).sum();
             bends * 100.0 + under * 250.0 + shared * 60.0 + wordy * 150.0 + len / 1000.0
         };
-        let best = shapes(a, b).into_iter().min_by(|x, y| cost(x).partial_cmp(&cost(y)).unwrap());
+        // a side the one who draws states (`from=` / `to=`): only lines that leave and arrive
+        // through it; when no line of the three shapes does, the stated side is kept, drawn
+        // with no more bends than two, and the line says so
+        let name = format!("{} → {}", e.from, e.to);
+        let mut notes: Vec<String> = Vec::new();
+        let stated = |w: &str, notes: &mut Vec<String>| -> Option<Side> {
+            if w.is_empty() {
+                return None;
+            }
+            let s = crate::route::side_named(w);
+            if s.is_none() {
+                notes.push(format!("{name}: 不認得的邊 {w}，已忽略"));
+            }
+            s
+        };
+        let (fs, ts) = (stated(&e.from_side, &mut notes), stated(&e.to_side, &mut notes));
+        let cands: Vec<Cand> = if fs.is_none() && ts.is_none() {
+            shapes(a, b)
+        } else {
+            let froms: Vec<Side> = fs.map(|s| vec![s]).unwrap_or(Side::ALL.to_vec());
+            let tos: Vec<Side> = ts.map(|s| vec![s]).unwrap_or(Side::ALL.to_vec());
+            let fits = |c: &Cand| froms.contains(&c.from) && tos.contains(&c.to);
+            let mut built: Vec<Cand> = Vec::new();
+            for &s in &froms {
+                for &t in &tos {
+                    built.extend(sided(a, b, s, t));
+                }
+            }
+            let good: Vec<Cand> = shapes(a, b).into_iter().filter(|c| fits(c)).chain(built.iter().filter(|c| goes_by_its_sides(c)).map(|c| Cand { pts: c.pts.clone(), from: c.from, to: c.to })).collect();
+            if good.is_empty() {
+                let said = [("from", &e.from_side), ("to", &e.to_side)].iter().filter(|(_, w)| !w.is_empty()).map(|(k, w)| format!("{k}={w}")).collect::<Vec<_>>().join(" ");
+                notes.push(format!("{name}: 照所說的邊（{said}）畫不出三種線形之一，保留所說的邊"));
+                // of the lines built from the stated sides, those that still go out of and into
+                // their sides (only the rule is given up); when none does (sides that face away
+                // from each other need more than two bends), those that go astray at fewer ends
+                let least = built.iter().map(ends_astray).min().unwrap_or(0);
+                built.into_iter().filter(|c| ends_astray(c) == least).collect()
+            } else {
+                good
+            }
+        };
+        let best = cands.into_iter().min_by(|x, y| cost(x).partial_cmp(&cost(y)).unwrap());
         // a line that bends and ends in the middle of a side where a line already ends the other
         // way (one leaves there, this one arrives) ends a quarter of the side further along
         // instead, on the side it comes from, so the two are told apart
@@ -171,9 +357,9 @@ pub fn lines(g: &Graph, lay: &Layout) -> Vec<Route> {
             c
         });
         let r = match best {
-            Some(c) => Route { edge: ei, points: c.pts, from_side: c.from, to_side: c.to, from_site: site_of(c.from, 2), to_site: site_of(c.to, 2), forced: false, warnings: Vec::new(), curve: e.curve, branch: false },
+            Some(c) => Route { edge: ei, points: c.pts, from_side: c.from, to_side: c.to, from_site: site_of(c.from, 2), to_site: site_of(c.to, 2), forced: false, warnings: notes, curve: e.curve, branch: false },
             // the two pictures lie over each other: nothing to draw but the join of their middles
-            None => Route { edge: ei, points: vec![(a.art.cx(), a.art.cy()), (b.art.cx(), b.art.cy())], from_side: Side::Right, to_side: Side::Left, from_site: site_of(Side::Right, 2), to_site: site_of(Side::Left, 2), forced: true, warnings: Vec::new(), curve: false, branch: false },
+            None => Route { edge: ei, points: vec![(a.art.cx(), a.art.cy()), (b.art.cx(), b.art.cy())], from_side: Side::Right, to_side: Side::Left, from_site: site_of(Side::Right, 2), to_site: site_of(Side::Left, 2), forced: true, warnings: notes, curve: false, branch: false },
         };
         done.push((ei, r));
     }

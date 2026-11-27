@@ -493,3 +493,190 @@ fn the_ground_of_a_passed_block_takes_its_frames_colour() {
     assert_eq!(ground, frame);
     assert_ne!(ground.trim_start_matches('#').to_uppercase(), theme.colors.paper.trim_start_matches('#').to_uppercase());
 }
+
+/// Built with the routes of `lines`: the objects and what could not be drawn as asked.
+fn built_lines(p: &Packed) -> (Vec<route::Route>, build::Built) {
+    let rs = lines::lines(&p.graph, &p.layout);
+    let (theme, vars, lib) = (Theme::classic_bw(), Vars::default(), Library::default());
+    let built = build::build_with(&p.graph, &theme, &vars, &lib, &NoMath, &p.layout, &rs, 2, &modules::no_images);
+    (rs, built)
+}
+
+/// A line that lies wholly along lines drawn before it and beneath blocks (a skip along a row
+/// of the flow) is not seen: it still has its route, and the figure says it does not show. A
+/// line from a block to itself has no shape of the three: it too is kept and says so. Every edge
+/// whose blocks are placed has a route.
+#[test]
+fn every_line_is_routed_and_one_that_does_not_show_says_so() {
+    let src = "fig t\npanel a \"\" none title=none\n  a: box \"A\" col=0 lane=0\n  b: box \"B\" col=1 lane=0\n  c: box \"C\" col=2 lane=0\n  d: box \"D\" col=3 lane=0\n  a -> b -> c -> d\n  a -> d : skip\nend\n";
+    let (_, mut p) = packed(src, (4, 1), "", &Air { stated: true, ..Air::default() });
+    // the text does not allow a line from a block to itself; a graph made otherwise may hold one
+    let mut own = p.graph.edges[0].clone();
+    (own.from, own.to) = ("c".into(), "c".into());
+    p.graph.edges.push(own);
+    let (rs, built) = built_lines(&p);
+    let mut edges: Vec<usize> = rs.iter().map(|r| r.edge).collect();
+    edges.sort();
+    assert_eq!(edges, (0..p.graph.edges.len()).collect::<Vec<_>>(), "a route for every edge");
+    let at = |from: &str, to: &str| rs.iter().position(|r| p.graph.edges[r.edge].from == from && p.graph.edges[r.edge].to == to).unwrap();
+    // the skip lies on the flow line and beneath b and c: nothing of it shows
+    assert!(lines::seen(&p.graph, &p.layout, &rs, at("a", "d")) < 0.5, "{:?} {:?}", rs.iter().map(|r| &r.points).collect::<Vec<_>>(), p.layout.nodes.iter().map(|n| n.art).collect::<Vec<_>>());
+    // the flow's own lines show whole
+    for (f, t) in [("a", "b"), ("b", "c"), ("c", "d")] {
+        let r = &rs[at(f, t)];
+        let len: f64 = r.points.windows(2).map(|w| (w[1].0 - w[0].0).abs() + (w[1].1 - w[0].1).abs()).sum();
+        assert!((lines::seen(&p.graph, &p.layout, &rs, at(f, t)) - len).abs() < 0.5, "{f} → {t}");
+    }
+    let says = |name: &str| built.warnings.iter().any(|w| w.starts_with(name));
+    assert!(says("a → d: 這條線看不到"), "{:?}", built.warnings);
+    assert!(!says("a → b") && !says("b → c") && !says("c → d"), "{:?}", built.warnings);
+    assert!(rs[at("c", "c")].warnings.iter().any(|w| w.contains("同一個方塊")));
+    assert!(says("c → c"), "{:?}", built.warnings);
+}
+
+/// A block tied to another with `by=` (a mark: it takes no cell) keeps every one of its lines:
+/// it is written at least a line's room (`Air.line`) from each block it shares a line with, so
+/// each line shows its shaft and its arrowhead, whether the side it was given has room or not.
+#[test]
+fn a_mark_tied_with_by_keeps_every_one_of_its_lines() {
+    for side in ["below", "right", "above"] {
+        let src = format!("fig t\npanel a \"\" none title=none\n  e: box \"E\" col=0 lane=0\n  f: box \"Wide block\" col=1 lane=0\n  m: box \"m\" col=2 lane=0 by=f side={side}\n  g: box \"G\" col=3 lane=0\n  e -> f -> m -> g\nend\n");
+        let air = Air { stated: true, ..Air::default() };
+        let (g, p) = packed(&src, (3, 1), "", &air);
+        assert!(p.notes.contains(&"m".to_string()), "{side}: a mark");
+        let (rs, built) = built_lines(&p);
+        let room = air.line * Theme::classic_bw().font.size;
+        let art = |id: &str| p.layout.nodes[g.node_index(id).unwrap()].art;
+        for other in ["f", "g"] {
+            let (m, o) = (art("m"), art(other));
+            let apart = (o.x - m.right()).max(m.x - o.right()).max(o.y - m.bottom()).max(m.y - o.bottom());
+            assert!(apart >= room - 0.5, "{side}: m is {apart:.1} from {other}, under a line's room {room:.1}");
+        }
+        for r in rs.iter().filter(|r| [&p.graph.edges[r.edge].from, &p.graph.edges[r.edge].to].iter().any(|x| *x == "m")) {
+            let i = rs.iter().position(|q| q.edge == r.edge).unwrap();
+            assert!(lines::seen(&p.graph, &p.layout, &rs, i) >= room - 0.5, "{side}: {:?}", r.points);
+            assert!(lines::keeps_the_rule(r));
+        }
+        assert!(!built.warnings.iter().any(|w| w.contains("看不到")), "{side}: {:?}", built.warnings);
+    }
+}
+
+/// A line that shares a block with another may run along it the same way (lines fanning out of
+/// one block), never back along it: drawn over that line it would not be seen.
+#[test]
+fn a_line_never_runs_back_along_a_line_of_its_own_block() {
+    let g = graph("fig t\ne: box \"E\"\nf: box \"F\"\nx: box \"X\"\ne -> f\nf -> x\n");
+    let place = |r: layout::Rect| layout::Placed { rect: r, reserve: r, port_y: r.cy(), art: r, words: Default::default(), panel: 0, layer: 0, lane: 0, single: false, ellipse: false, ends: Default::default(), origin: (0.0, 0.0) };
+    let rects = [layout::Rect::new(0.0, 0.0, 40.0, 20.0), layout::Rect::new(100.0, 0.0, 40.0, 20.0), layout::Rect::new(60.0, 80.0, 30.0, 20.0)];
+    let bounds = layout::Rect::new(-10.0, -10.0, 170.0, 130.0);
+    let lay = layout::Layout { nodes: rects.iter().map(|r| place(*r)).collect(), panels: vec![layout::PanelBox { id: "_".into(), title: String::new(), rect: bounds, title_rect: None, bare: true, down: false }], regions: Vec::new(), legend: Vec::new(), swatches: Vec::new(), bounds, scale: 1.0 };
+    let rs = lines::lines(&g, &lay);
+    // leaving F on the left would be the shorter bend, but back along E → F
+    let r = &rs[1];
+    assert_eq!(r.from_side, route::Side::Bottom, "{:?}", r.points);
+    assert!((lines::seen(&g, &lay, &rs, 1) - r.points.windows(2).map(|w| (w[1].0 - w[0].0).abs() + (w[1].1 - w[0].1).abs()).sum::<f64>()).abs() < 0.5);
+}
+
+/// The first run of a line goes out of `from`, its last run into `to`.
+fn by_sides(r: &route::Route) -> bool {
+    let n = r.points.len();
+    let go = |p: (f64, f64), q: (f64, f64), d: (f64, f64)| (q.0 - p.0) * d.0 + (q.1 - p.1) * d.1 > 0.05;
+    let (o, i) = (r.from_side.normal(), r.to_side.normal());
+    go(r.points[0], r.points[1], o) && go(r.points[n - 2], r.points[n - 1], (-i.0, -i.1))
+}
+
+/// A side stated on a line (`from=` / `to=`) is the side it leaves or arrives by: only lines of
+/// the three shapes through it are drawn; when none exists the side is still kept, the line has
+/// no more than two bends, and it says so.
+#[test]
+fn a_stated_side_is_the_side_a_line_leaves_or_arrives_by() {
+    let src = |opts: &str| format!("fig t\npanel a \"\" none title=none\n  a: box \"A\" col=0 lane=0\n  b: box \"B\" col=1 lane=1\n  c: box \"C\" col=2 lane=0\n  a -> b{opts}\n  a -> c\nend\n");
+    let air = Air { stated: true, ..Air::default() };
+    for (opts, from, to) in [
+        (" from=bottom", Some(route::Side::Bottom), None),
+        (" to=top", None, Some(route::Side::Top)),
+        (" from=right to=top", Some(route::Side::Right), Some(route::Side::Top)),
+        (" from=bottom to=left", Some(route::Side::Bottom), Some(route::Side::Left)),
+    ] {
+        let (_, p) = packed(&src(opts), (3, 1), "", &air);
+        let rs = lines::lines(&p.graph, &p.layout);
+        let r = &rs[0];
+        assert!(from.is_none_or(|s| r.from_side == s) && to.is_none_or(|s| r.to_side == s), "{opts}: {:?} {:?}", r.from_side, r.to_side);
+        assert!(by_sides(r) && lines::keeps_the_rule(r), "{opts}: {:?}", r.points);
+        assert!(r.warnings.is_empty(), "{opts}: {:?}", r.warnings);
+    }
+    // the same row, both ends stated on the bottom: no line of the three shapes, the sides kept
+    let (_, p) = packed(&src("").replace("a -> c\n", "a -> c from=bottom to=bottom\n"), (3, 1), "", &air);
+    let rs = lines::lines(&p.graph, &p.layout);
+    let r = &rs[1];
+    assert_eq!((r.from_side, r.to_side), (route::Side::Bottom, route::Side::Bottom));
+    assert!(r.bends() <= 2 && by_sides(r), "{:?}", r.points);
+    assert!(r.warnings.iter().any(|w| w.starts_with("a → c") && w.contains("from=bottom to=bottom")), "{:?}", r.warnings);
+    // sides that need a line back the way it came: kept, and the line still goes out of the
+    // stated side, not through its own block
+    for (from, to) in [("top", "top"), ("top", ""), ("right", "right")] {
+        let opts = [("from", from), ("to", to)].iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| format!(" {k}={v}")).collect::<String>();
+        let (_, p) = packed(&src(&opts), (3, 1), "", &air);
+        let r = &lines::lines(&p.graph, &p.layout)[0];
+        assert!(r.bends() <= 2 && by_sides(r), "{opts}: {:?} {:?} {:?}", r.from_side, r.to_side, r.points);
+        assert_eq!(format!("{:?}", r.from_side).to_lowercase(), from, "{opts}");
+    }
+    // sides that face away from each other have no line of two bends that goes by both: the
+    // stated sides are kept and the line says so
+    let (_, p) = packed(&src("").replace("a -> c\n", "a -> c from=left to=right\n"), (3, 1), "", &air);
+    let r = &lines::lines(&p.graph, &p.layout)[1];
+    assert_eq!((r.from_side, r.to_side), (route::Side::Left, route::Side::Right));
+    assert!(r.bends() <= 2 && !r.warnings.is_empty(), "{:?}", r.points);
+    // lines without a stated side are as before
+    let (_, q) = packed(&src(""), (3, 1), "", &air);
+    let plain = lines::lines(&q.graph, &q.layout);
+    assert!(plain.iter().all(|r| r.warnings.is_empty() && lines::keeps_the_rule(r)));
+}
+
+/// A block's part on the page, in points: `part` of the group of block `id` (`port` = its picture).
+fn part_rect(built: &build::Built, id: &str, part: &str) -> layout::Rect {
+    let o = built.objects.iter().find(|o| o.name == build::node_name("t", id)).expect("the block");
+    let lore_canvas::Kind::Group(gr) = &o.kind else { panic!("a group") };
+    let c = gr.children.iter().find(|c| c.name.ends_with(&format!("/{part}"))).unwrap_or_else(|| panic!("{id} has no {part}"));
+    let e = modules::EMU_PT;
+    layout::Rect::new((o.frame.x + c.frame.x) as f64 / e, (o.frame.y + c.frame.y) as f64 / e, c.frame.w as f64 / e, c.frame.h as f64 / e)
+}
+
+/// `label_at=above`: the words a picture writes under it are written above it, those of one row
+/// on one line over the row's tallest picture, and a line leaving the picture's bottom does not
+/// cross them. Without it nothing changes (the words stay under the picture).
+#[test]
+fn words_written_above_the_picture_leave_its_bottom_free() {
+    let src = |at: &str| format!("fig t\npanel a \"\" none title=none\n  x: image \"Input picture\" look=photo{at} col=0 lane=0\n  s: vector-bar \"Small\" n=4 dir=h{at} col=1 lane=0\n  y: box \"Next\" col=0 lane=1\n  x -> s\n  x -> y from=bottom\nend\n");
+    let air = Air { stated: true, ..Air::default() };
+    let (_, p) = packed(&src(" label_at=above"), (2, 1), "", &air);
+    let (rs, built) = built_lines(&p);
+    let (xl, xa) = (part_rect(&built, "x", "label"), part_rect(&built, "x", "port"));
+    let (sl, sa) = (part_rect(&built, "s", "label"), part_rect(&built, "s", "port"));
+    assert!(xl.bottom() <= xa.y + 0.01, "the label {xl:?} lies above the picture {xa:?}");
+    assert!(sl.bottom() <= sa.y + 0.01, "{sl:?} {sa:?}");
+    // one line of words over the row's tallest picture (the small one stands lower)
+    assert!(sa.y > xa.y + 1.0, "{sa:?} {xa:?}");
+    assert!((xl.y - sl.y).abs() < 0.5, "{xl:?} {sl:?}");
+    assert!(sl.bottom() <= xa.y.min(sa.y) + 0.01);
+    // the router knows: words above, none below
+    let x = &p.layout.nodes[p.graph.node_index("x").unwrap()];
+    assert_eq!(x.words, (true, false));
+    let down = rs.iter().find(|r| p.graph.edges[r.edge].to == "y").unwrap();
+    assert_eq!(down.from_side, route::Side::Bottom);
+    for w in down.points.windows(2) {
+        assert!(!route::segment_hits(w[0], w[1], &xl), "{:?} crosses {xl:?}", down.points);
+    }
+    // the same in rows broken freely (no grid): words above, one line over the row's tallest
+    let free = "fig t\npanel a \"\" none title=none\n  x: image \"Input picture\" look=photo label_at=above\n  s: vector-bar \"Small\" n=4 dir=h label_at=above\n  x -> s\nend\n";
+    let (_, f) = packed(free, (3, 1), "", &Air::default());
+    assert!(!f.areas[0].grid && f.areas[0].rows.len() == 1, "{:?}", f.areas[0].rows);
+    let (_, fb) = built_lines(&f);
+    let (xl, xa, sl, sa) = (part_rect(&fb, "x", "label"), part_rect(&fb, "x", "port"), part_rect(&fb, "s", "label"), part_rect(&fb, "s", "port"));
+    assert!(xl.bottom() <= xa.y + 0.01 && sl.bottom() <= sa.y + 0.01 && sa.y > xa.y + 1.0);
+    assert!((xl.y - sl.y).abs() < 0.5 && sl.bottom() <= xa.y + 0.01, "{xl:?} {sl:?} {xa:?}");
+    // the default: the words under the picture
+    let (_, q) = packed(&src(""), (2, 1), "", &air);
+    let (_, b0) = built_lines(&q);
+    assert!(part_rect(&b0, "x", "label").y >= part_rect(&b0, "x", "port").bottom() - 0.01);
+}
