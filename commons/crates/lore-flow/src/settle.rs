@@ -12,6 +12,8 @@
 //!    to it than to its neighbours in that row.
 //! 4. A bracket is as wide as the columns it lies over; a brace as tall as its rows.
 //! 5. A box or a line of words longer than [`LONG`] letters breaks in two near its middle.
+//! 6. Turned words in a box that are no longer than [`UPRIGHT`] letters are written upright
+//!    (the box is widened): words are turned only when they are long and the bar is narrow.
 
 use crate::pack;
 use crate::spec::{EdgeKind, Graph, Node};
@@ -19,6 +21,9 @@ use serde_json::json;
 
 /// The length of words (letters) over which a box's or a label's words are broken in two.
 pub const LONG: usize = 22;
+
+/// The most letters a box's turned words may have to be written upright instead.
+pub const UPRIGHT: usize = 4;
 
 fn at(n: &Node) -> Option<(f64, f64)> {
     Some((n.num("col")?, n.num("lane")?))
@@ -235,6 +240,20 @@ pub fn settle(g: &Graph) -> (Graph, Vec<String>) {
         } else if n.module == "brace" && n.num("tall").is_some_and(|t| t > 1.0) {
             n.params.insert("stretch".into(), json!("tall"));
             said.push(format!("{}：跟所括的列一樣高", n.id));
+        }
+    }
+
+    // 6. words are written upright wherever that costs little: a box whose words are turned
+    // (`vertical`) and are short (a symbol, a few letters) is widened to hold them upright
+    // instead; only long words in a narrow bar stay turned
+    for n in &mut g.nodes {
+        if n.module != "box" || !n.flag("vertical") || n.flag("stated") {
+            continue;
+        }
+        let letters = n.label.chars().filter(|c| !matches!(c, '$' | '^' | '_' | '{' | '}' | '\\' | ' ')).count();
+        if letters > 0 && letters <= UPRIGHT {
+            n.params.remove("vertical");
+            said.push(format!("{}：字短，寫成正的（方框加寬）", n.id));
         }
     }
 

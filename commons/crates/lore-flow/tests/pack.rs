@@ -829,3 +829,19 @@ fn a_row_of_pictures_no_line_touches_is_not_a_row_of_headings() {
     let (s, said) = settle(&g);
     assert!(s.nodes.iter().all(|n| n.num("span").is_none()), "{said:?}");
 }
+
+/// Words are turned only when they are long and the bar is narrow: a box of a few letters
+/// stated `vertical` is written upright (and so drawn wider than it was), a long one stays.
+#[test]
+fn short_words_in_a_box_are_written_upright() {
+    use lore_flow::settle::settle;
+    let src = "fig t\npanel a \"\" none title=none\n  l: box \"$L^2$\" vertical=true h=60 col=0 lane=0\n  m: box \"Fusion History\" vertical=true col=1 lane=0\n  l -> m\nend\n";
+    let (s, said) = settle(&dsl::parse(src).unwrap());
+    let of = |id: &str| &s.nodes[s.node_index(id).unwrap()];
+    assert!(!of("l").flag("vertical") && of("m").flag("vertical"), "{said:?}");
+    assert_eq!(of("l").num("h"), Some(60.0));
+    let (_, before) = packed(src, (2, 1), "", &Air::default());
+    let (_, after) = packed(&dsl::to_dsl(&s), (2, 1), "", &Air::default());
+    let w = |p: &Packed| p.layout.nodes[0].art.w / p.layout.scale;
+    assert!(w(&after) > w(&before), "the box is wider upright: {} vs {}", w(&after), w(&before));
+}
