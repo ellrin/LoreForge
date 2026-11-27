@@ -127,6 +127,21 @@ the text size and cover of each shape the whole figure can take (width : height,
 largest text first: the shape is chosen first, and every later step keeps it. `OUTLINE=1` in the
 example prints both.
 
+What the one who draws says (`command::Command`, `command::apply(graph, command)`): a closed set
+of commands, each a relation between named objects and never a coordinate. `beside` (A next to B
+on a side: the free neighbouring cell, else a column or row of its own between), `align` (A in
+B's row or column), `over` (A over the columns from B to C), `beside-rows` (A beside the rows
+from B to C, `fill` = as tall), `tie` (a mark belongs to a block, on a side, and takes no cell),
+`swap`, `cell` (the column and row as the text counts them), `stretch`, `break` / `one-line` (a
+label's words), `line-side` (the side a line leaves and arrives by), `free` (what was said about
+A is taken back). The answer is the figure and what changed, in words, or a `Clash`: why it
+cannot be done and who is in the way (a taken cell names who stands there; an unknown name comes
+back with the nearest names, by name or by the words on the object). What a command places
+carries `stated`, and `settle` leaves it alone. Commands are written as JSON (`{"do":"tie",
+"mark":…,"to":…,"side":"above"}`): what a model returns for a sentence; `apply_all` leaves out
+the ones that cannot be done and keeps their reasons. `COMMANDS=<file>` in the example. Tests in
+`tests/command.rs`. Not yet behind any app or model.
+
 What a figure's structure settles by itself (`settle::settle`, before anyone states anything;
 what is stated stays): a small thing nothing is joined to (a return arrow, a loss no line
 reaches) is tied to the nearest module; a module joined to modules that stand in one column in

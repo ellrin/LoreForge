@@ -53,6 +53,24 @@ fn main() {
     } else {
         g
     };
+    // `COMMANDS=<file>`: what the one who draws says (a JSON list of `command::Command`), each
+    // answered with what it changed or why it cannot be done; the structure settles again
+    // round what was said
+    let g = match std::env::var("COMMANDS") {
+        Ok(path) => {
+            let cs: Vec<lore_flow::command::Command> = serde_json::from_str(&std::fs::read_to_string(&path).expect("commands file")).expect("commands");
+            let (g2, said, not) = lore_flow::command::apply_all(&g, &cs);
+            for s in &said {
+                println!("  said: {s}");
+            }
+            for c in &not {
+                println!("  cannot: {}", c.why);
+            }
+            println!("commands {}; done {}; cannot {}", cs.len(), cs.len() - not.len(), not.len());
+            if std::env::var("SETTLE").is_ok() { lore_flow::settle::settle(&g2).0 } else { g2 }
+        }
+        Err(_) => g,
+    };
     // `OUTLINE=1`: the opening statement (areas, modules, frames, marks, paths) and what each
     // shape of the whole figure gives, before anything is placed
     if std::env::var("OUTLINE").is_ok() {

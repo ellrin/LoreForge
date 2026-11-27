@@ -1,7 +1,8 @@
 //! What a figure's structure settles by itself, before anyone states anything: placement that
 //! follows from who is joined to whom, what kind a thing is and where it was put on the grid,
 //! never from how one particular figure happened to be laid out. Each rule leaves alone
-//! whatever is already stated, and says what it settled.
+//! whatever is already stated (a `tall=`, a `span=`, a `by=`; and every object a command
+//! placed, which carries `stated`), and says what it settled.
 //!
 //! 1. A small thing nothing is joined to (a return arrow, a loss no line reaches) belongs to
 //!    the nearest module: it is tied to it and takes no cell.
@@ -34,7 +35,7 @@ pub fn settle(g: &Graph) -> (Graph, Vec<String>) {
     let loose: Vec<usize> = (0..g.nodes.len())
         .filter(|i| {
             let n = &g.nodes[*i];
-            (n.module == "loss" || n.module.starts_with("arrow")) && n.str("by").is_none() && !touched(&g, &n.id) && at(n).is_some()
+            (n.module == "loss" || n.module.starts_with("arrow")) && !n.flag("stated") && n.str("by").is_none() && !touched(&g, &n.id) && at(n).is_some()
         })
         .collect();
     for &i in &loose {
@@ -72,7 +73,7 @@ pub fn settle(g: &Graph) -> (Graph, Vec<String>) {
     let flows = |k: EdgeKind| matches!(k, EdgeKind::Data | EdgeKind::Side);
     let first: Vec<Option<(f64, f64)>> = g.nodes.iter().map(at).collect();
     for i in 0..g.nodes.len() {
-        if !object(&g, i) || g.nodes[i].params.contains_key("tall") || down(&g, &g.nodes[i].panel) {
+        if !object(&g, i) || g.nodes[i].flag("stated") || g.nodes[i].params.contains_key("tall") || down(&g, &g.nodes[i].panel) {
             continue;
         }
         let (c, l) = at(&g.nodes[i]).unwrap();
@@ -133,7 +134,7 @@ pub fn settle(g: &Graph) -> (Graph, Vec<String>) {
                 .filter(|j| *j != i && object(&g, *j) && g.nodes[*j].panel == g.nodes[i].panel && at(&g.nodes[*j]).is_some_and(|(x, y)| (x - c).abs() < 1e-6 && y >= lo - 1e-6 && y <= hi + 1e-6))
                 .collect();
             let joined = |j: usize| g.edges.iter().any(|e| (e.from == id && e.to == g.nodes[j].id) || (e.to == id && e.from == g.nodes[j].id));
-            if !blockers.is_empty() && blockers.iter().all(|j| joined(*j) && g.nodes[*j].num("tall").unwrap_or(1.0) <= 1.0 && g.nodes[*j].num("span").unwrap_or(1.0) <= 1.0) {
+            if !blockers.is_empty() && blockers.iter().all(|j| joined(*j) && !g.nodes[*j].flag("stated") && g.nodes[*j].num("tall").unwrap_or(1.0) <= 1.0 && g.nodes[*j].num("span").unwrap_or(1.0) <= 1.0) {
                 for j in blockers {
                     let leaves = g.edges.iter().any(|e| e.from == id && e.to == g.nodes[j].id);
                     let x = c + if leaves { 0.5 } else { -0.5 };
@@ -156,7 +157,7 @@ pub fn settle(g: &Graph) -> (Graph, Vec<String>) {
     loop {
         let mut moved = false;
         for i in 0..g.nodes.len() {
-            if !object(&g, i) || g.nodes[i].params.contains_key("tall") || down(&g, &g.nodes[i].panel) {
+            if !object(&g, i) || g.nodes[i].flag("stated") || g.nodes[i].params.contains_key("tall") || down(&g, &g.nodes[i].panel) {
                 continue;
             }
             let id = g.nodes[i].id.clone();
@@ -200,7 +201,7 @@ pub fn settle(g: &Graph) -> (Graph, Vec<String>) {
             // headings are words (a label, a box) or brackets: a row of small pictures no line
             // touches (the entries of a key) is not over anything
             let heads = |i: &usize| matches!(g.nodes[*i].module.as_str(), "label" | "box" | "bracket");
-            if row.len() < 2 || !row.iter().all(heads) || row.iter().any(|i| touched(&g, &g.nodes[*i].id) || g.nodes[*i].params.contains_key("span")) {
+            if row.len() < 2 || !row.iter().all(heads) || row.iter().any(|i| touched(&g, &g.nodes[*i].id) || g.nodes[*i].flag("stated") || g.nodes[*i].params.contains_key("span")) {
                 continue;
             }
             // nothing else may reach into this row
@@ -225,7 +226,7 @@ pub fn settle(g: &Graph) -> (Graph, Vec<String>) {
 
     // 4. a bracket as wide as its columns, a brace as tall as its rows
     for n in &mut g.nodes {
-        if n.params.contains_key("stretch") {
+        if n.params.contains_key("stretch") || n.flag("stated") {
             continue;
         }
         if n.module == "bracket" && n.num("span").is_some_and(|s| s > 1.0) {
@@ -239,7 +240,7 @@ pub fn settle(g: &Graph) -> (Graph, Vec<String>) {
 
     // 5. long words in a box or a label break in two near the middle, outside maths
     for n in &mut g.nodes {
-        if !matches!(n.module.as_str(), "box" | "label") || n.flag("vertical") || n.label.contains("\\\\") || n.label.chars().count() <= LONG {
+        if !matches!(n.module.as_str(), "box" | "label") || n.flag("vertical") || n.flag("stated") || n.label.contains("\\\\") || n.label.chars().count() <= LONG {
             continue;
         }
         let chars: Vec<char> = n.label.chars().collect();

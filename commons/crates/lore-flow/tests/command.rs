@@ -1,0 +1,183 @@
+//! What the one who draws says, as commands: relations between named objects, worked out here.
+
+use lore_flow::command::{Axis, Clash, Command, Fill, Way, apply, apply_all};
+use lore_flow::settle::settle;
+use lore_flow::*;
+
+fn graph(src: &str) -> Graph {
+    dsl::parse_with(src, &["bracket".to_string()]).unwrap_or_else(|e| panic!("{e:?}"))
+}
+
+const FIG: &str = "fig t\npanel a \"\" none title=none\n  x: image \"In\" look=photo col=0 lane=1\n  e: box \"Encoder\" col=1 lane=1\n  n: box \"Self attention net\" col=2 lane=0\n  d: box \"Decoder\" col=2 lane=1\n  f: box \"Fusion\" col=2 lane=2\n  o: box \"Out\" col=3 lane=1\n  h: label \"Reading the input\" col=0 lane=3\n  k: bracket \"\" style=under col=0 lane=4\n  l: loss \"L\" col=3 lane=0\n  x -> e -> d -> o\n  e -> n : side\n  e -> f : side\nend\n";
+
+fn of<'a>(g: &'a Graph, id: &str) -> &'a spec::Node {
+    &g.nodes[g.node_index(id).unwrap()]
+}
+
+/// The pattern the unaided run got wrong: a loose loss is tied to the module nearest it, which
+/// is not the one it belongs to. One sentence ("the loss belongs right of the output") puts it
+/// right, and the structure does not take it back.
+#[test]
+fn a_mark_tied_to_the_wrong_neighbour_is_put_right_by_one_command() {
+    let (s, _) = settle(&graph(FIG));
+    assert_eq!(of(&s, "l").str("by"), Some("n"), "nearest module by the structure alone");
+    let (g, said) = apply(&s, &Command::Tie { mark: "l".into(), to: "o".into(), side: Some(Way::Right) }).unwrap();
+    assert_eq!((of(&g, "l").str("by"), of(&g, "l").str("side")), (Some("o"), Some("right")));
+    assert_eq!(said.len(), 1);
+    let (again, _) = settle(&g);
+    assert_eq!((of(&again, "l").str("by"), of(&again, "l").str("side")), (Some("o"), Some("right")));
+}
+
+/// Each placement is a relation worked out from where the named objects stand.
+#[test]
+fn placements_are_worked_out_from_the_objects_named() {
+    let g = graph(FIG);
+    // beside: the free neighbouring cell
+    let (b, _) = apply(&g, &Command::Beside { a: "l".into(), of: "f".into(), side: Way::Right }).unwrap();
+    assert_eq!((of(&b, "l").num("col"), of(&b, "l").num("lane")), (Some(3.0), Some(2.0)));
+    // beside, the neighbouring cell taken: a column of its own between the two
+    let (b, _) = apply(&g, &Command::Beside { a: "l".into(), of: "e".into(), side: Way::Right }).unwrap();
+    assert_eq!((of(&b, "l").num("col"), of(&b, "l").num("lane")), (Some(1.5), Some(1.0)));
+    // below the lowest object: one row further
+    let (b, _) = apply(&g, &Command::Beside { a: "l".into(), of: "k".into(), side: Way::Below }).unwrap();
+    assert_eq!((of(&b, "l").num("col"), of(&b, "l").num("lane")), (Some(0.0), Some(5.0)));
+    // in another's row, in another's column
+    let (b, _) = apply(&g, &Command::Align { a: "l".into(), with: "h".into(), axis: Axis::Row }).unwrap();
+    assert_eq!(of(&b, "l").num("lane"), Some(3.0));
+    let (b, _) = apply(&g, &Command::Align { a: "h".into(), with: "e".into(), axis: Axis::Column }).unwrap();
+    assert_eq!(of(&b, "h").num("col"), Some(1.0));
+    // over the columns from one object to another
+    let (b, _) = apply(&g, &Command::Over { a: "h".into(), from: "x".into(), to: "d".into() }).unwrap();
+    assert_eq!((of(&b, "h").num("col"), of(&b, "h").num("span")), (Some(0.0), Some(3.0)));
+    // beside the rows from one object to another, as tall as they
+    let (b, _) = apply(&g, &Command::BesideRows { a: "o".into(), from: "n".into(), to: "f".into(), fill: true }).unwrap_err_or_ok();
+    assert_eq!((of(&b, "o").num("lane"), of(&b, "o").num("tall"), of(&b, "o").str("stretch")), (Some(0.0), Some(3.0), Some("tall")));
+    // two objects change places
+    let (b, _) = apply(&g, &Command::Swap { a: "n".into(), b: "f".into() }).unwrap();
+    assert_eq!((of(&b, "n").num("lane"), of(&b, "f").num("lane")), (Some(2.0), Some(0.0)));
+    // stretch, and back
+    let (b, _) = apply(&g, &Command::Stretch { a: "k".into(), way: Fill::Wide }).unwrap();
+    assert_eq!(of(&b, "k").str("stretch"), Some("wide"));
+    let (b, _) = apply(&b, &Command::Stretch { a: "k".into(), way: Fill::None }).unwrap();
+    assert!(of(&b, "k").str("stretch").is_none());
+}
+
+trait Either {
+    fn unwrap_err_or_ok(self) -> (Graph, Vec<String>);
+}
+impl Either for Result<(Graph, Vec<String>), Clash> {
+    /// `o` beside three rows takes the cell of the loss beside it: the loss is tied first.
+    fn unwrap_err_or_ok(self) -> (Graph, Vec<String>) {
+        match self {
+            Ok(r) => r,
+            Err(c) => {
+                assert_eq!(c.who, vec!["l".to_string()], "{}", c.why);
+                let g = graph(FIG);
+                let (g, _) = apply(&g, &Command::Tie { mark: "l".into(), to: "o".into(), side: None }).unwrap();
+                apply(&g, &Command::BesideRows { a: "o".into(), from: "n".into(), to: "f".into(), fill: true }).unwrap()
+            }
+        }
+    }
+}
+
+/// A command that cannot be done says why and who is in the way; an unknown name comes back
+/// with the names nearest to it; the figure is left as it was.
+#[test]
+fn what_cannot_be_done_says_why_and_who() {
+    let g = graph(FIG);
+    let taken = apply(&g, &Command::Cell { a: "l".into(), col: 2.0, row: 1.0 }).unwrap_err();
+    assert_eq!(taken.who, vec!["d".to_string()]);
+    assert!(taken.why.contains('d') && taken.why.contains('l'), "{}", taken.why);
+    let unknown = apply(&g, &Command::Tie { mark: "los".into(), to: "n".into(), side: None }).unwrap_err();
+    assert_eq!(unknown.who.first().map(String::as_str), Some("l"), "{unknown:?}");
+    let by_words = apply(&g, &Command::Tie { mark: "l".into(), to: "fusion".into(), side: None }).unwrap_err();
+    assert!(by_words.who.contains(&"f".to_string()), "{by_words:?}");
+    let main = apply(&g, &Command::Tie { mark: "d".into(), to: "n".into(), side: None }).unwrap_err();
+    assert!(main.why.contains("主線"), "{}", main.why);
+    let no_line = apply(&g, &Command::LineSide { from: "x".into(), to: "o".into(), leave: Some(Way::Above), arrive: None }).unwrap_err();
+    assert!(no_line.who.iter().any(|w| w == "x → e"), "{no_line:?}");
+    let no_word = apply(&g, &Command::Break { a: "h".into(), before: "nothing".into() }).unwrap_err();
+    assert!(no_word.why.contains("Reading the input"), "{}", no_word.why);
+    // several at once: the one that cannot be done is left out, the others apply
+    let (after, said, not) = apply_all(&g, &[Command::Cell { a: "l".into(), col: 2.0, row: 1.0 }, Command::Break { a: "h".into(), before: "the".into() }]);
+    assert_eq!((said.len(), not.len()), (1, 1));
+    assert_eq!(of(&after, "h").label, "Reading\\\\the input");
+    assert_eq!(of(&after, "l").num("col"), Some(3.0));
+}
+
+/// Words and lines: a break before a word (the only one), back to one line, the side a line
+/// leaves and arrives by, and both handed back.
+#[test]
+fn words_break_where_said_and_lines_take_the_sides_said() {
+    let g = graph(FIG);
+    let (b, _) = apply(&g, &Command::Break { a: "n".into(), before: "attention".into() }).unwrap();
+    assert_eq!(of(&b, "n").label, "Self\\\\attention net");
+    let (b, _) = apply(&b, &Command::Break { a: "n".into(), before: "net".into() }).unwrap();
+    assert_eq!(of(&b, "n").label, "Self attention\\\\net");
+    let (b, _) = apply(&b, &Command::OneLine { a: "n".into() }).unwrap();
+    assert_eq!(of(&b, "n").label, "Self attention net");
+    let (b, said) = apply(&g, &Command::LineSide { from: "e".into(), to: "n".into(), leave: Some(Way::Above), arrive: Some(Way::Left) }).unwrap();
+    let e = b.edges.iter().find(|e| e.from == "e" && e.to == "n").unwrap();
+    assert_eq!((e.from_side.as_str(), e.to_side.as_str(), said.len()), ("top", "left", 2));
+    let (b, _) = apply(&b, &Command::LineSide { from: "e".into(), to: "n".into(), leave: None, arrive: None }).unwrap();
+    let e = b.edges.iter().find(|e| e.from == "e" && e.to == "n").unwrap();
+    assert!(e.from_side.is_empty() && e.to_side.is_empty());
+}
+
+/// What a command placed stays through `settle`, for every command that places; and taking it
+/// back hands the object to the structure again.
+#[test]
+fn what_is_said_stays_when_the_structure_settles_again() {
+    let (s, _) = settle(&graph(FIG));
+    // by the structure alone: the encoder stands beside the three rows it feeds, the heading
+    // breaks, the bracket is not stretched (it lies over one column)
+    assert_eq!(of(&s, "e").num("tall"), Some(3.0));
+    let said: Vec<Command> = vec![
+        Command::Align { a: "e".into(), with: "f".into(), axis: Axis::Row },
+        Command::Over { a: "k".into(), from: "x".into(), to: "e".into() },
+        Command::Stretch { a: "k".into(), way: Fill::None },
+        Command::OneLine { a: "n".into() },
+        Command::Beside { a: "h".into(), of: "k".into(), side: Way::Below },
+    ];
+    let (g, done, not) = apply_all(&s, &said);
+    assert!(not.is_empty(), "{not:?} after {done:?}");
+    let (again, settled) = settle(&g);
+    for id in ["e", "k", "n", "h"] {
+        assert_eq!(of(&again, id), of(&g, id), "{id} was changed: {settled:?}");
+    }
+    assert_eq!((of(&again, "e").num("lane"), of(&again, "e").num("tall")), (Some(2.0), None));
+    // taken back: the structure settles the encoder beside its rows again
+    let (freed, _) = apply(&again, &Command::Free { a: "e".into() }).unwrap();
+    let (back, _) = settle(&freed);
+    assert!(!of(&back, "e").flag("stated"));
+}
+
+/// A command is written as the model will return it, and read back the same.
+#[test]
+fn a_command_is_written_and_read_as_json() {
+    let c: Vec<Command> = serde_json::from_str(r#"[{"do":"tie","mark":"l","to":"n","side":"above"},{"do":"beside-rows","a":"o","from":"n","to":"f"},{"do":"line-side","from":"e","to":"n","leave":"above"}]"#).unwrap();
+    assert_eq!(c[0], Command::Tie { mark: "l".into(), to: "n".into(), side: Some(Way::Above) });
+    assert_eq!(c[1], Command::BesideRows { a: "o".into(), from: "n".into(), to: "f".into(), fill: false });
+    assert_eq!(serde_json::to_string(&c[2]).unwrap(), r#"{"do":"line-side","from":"e","to":"n","leave":"above"}"#);
+}
+
+/// The figure a command answers with is placed and drawn like any other: the tied mark takes
+/// no cell and the page still packs.
+#[test]
+fn a_commanded_figure_packs() {
+    use lore_flow::pack::{self, Air};
+    use lore_flow::plate::{Format, Measure};
+    let (s, _) = settle(&graph(FIG));
+    let (g, _) = apply(&s, &Command::Tie { mark: "l".into(), to: "o".into(), side: Some(Way::Right) }).unwrap();
+    let (theme, vars, lib) = (Theme::classic_bw(), Vars::default(), Library::default());
+    let m = Measure { theme: &theme, vars: &vars, library: &lib, image_size: &modules::no_images };
+    let p = pack::pack(&g, &Format::new(500.0, (2, 1)), &m, "", &Air { stated: true, ..Air::default() }).expect("packed");
+    assert!(p.notes.contains(&"l".to_string()), "{:?}", p.notes);
+    // it is written in free room by the output (the page ends right of the output here, so
+    // the side said is kept as nearly as the room allows), over nothing
+    let l = p.layout.nodes[g.node_index("l").unwrap()].art;
+    let o = p.layout.nodes[g.node_index("o").unwrap()].art;
+    assert!(p.crowded.is_empty(), "{:?}", p.crowded);
+    assert!(p.layout.nodes.iter().enumerate().all(|(i, n)| i == g.node_index("l").unwrap() || !n.art.inflate(-0.5).overlaps(&l)), "the loss {l:?} lies over a block");
+    assert!(l.cx() > o.cx() && (l.cy() - o.cy()).abs() < 2.0 * o.h, "the loss {l:?} by the output {o:?}");
+}
